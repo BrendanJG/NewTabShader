@@ -8,11 +8,26 @@
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;overflow:hidden;background:#09090b}
 canvas{position:absolute;inset:0;width:100%;height:100%}
-#clock{position:absolute;inset:0;display:none;align-items:center;justify-content:center;font:200 12vmin/1 system-ui,sans-serif;color:#fff;mix-blend-mode:difference;letter-spacing:.04em;pointer-events:none}
+#clock{position:fixed;left:20px;bottom:16px;z-index:2;display:none;font:300 15px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;letter-spacing:.06em;color:rgba(255,255,255,.88);text-shadow:0 1px 8px rgba(0,0,0,.7);pointer-events:none}
+#panel{position:fixed;right:14px;bottom:12px;z-index:3;display:flex;gap:6px;align-items:center;opacity:.25;transition:opacity .2s}
+#panel:hover,#panel.open{opacity:1}
+#panel .btns{display:none;gap:6px}
+#panel.open .btns{display:flex}
+#panel button{font:12px system-ui,sans-serif;color:#fff;background:rgba(10,10,12,.55);border:1px solid rgba(255,255,255,.22);border-radius:8px;padding:6px 10px;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+#panel button:hover{background:rgba(40,40,46,.7)}
+#gear{font-size:15px!important;line-height:1;padding:6px 9px!important}
 </style>
 </head>
 <body>
 <div id="clock"></div>
+<div id="panel">
+  <div class="btns">
+    <button id="next" title="New random shader (N)">Shuffle</button>
+    <button id="ctoggle" title="Toggle clock (C)">Clock: on</button>
+    <button id="c24" title="12 / 24 hour">12h</button>
+  </div>
+  <button id="gear" title="Controls">&#9881;</button>
+</div>
 <script>
 'use strict';
 /* ---------- helpers ---------- */
@@ -616,7 +631,7 @@ function runNew(eff,mode,scan){
 /* ---------- pick one of 21 at random ---------- */
 // 0-6 dither shapes (simplex, warp, dots, sine, ripple, swirl, sphere) | 7 fluid gradient | 8-20 new effects
 // (metaballs, voronoi, contours, tunnel, moire, plasma, kaleidoscope, truchet, aurora, marble, julia, starfield, caustics)
-// URL options: ?s=0-7 (0 fluid, 1-7 dither) | ?e=0-12 new effect | &m=0 dither,1 smooth,2 halftone | &scan=0.15 | ?clock
+// URL options: ?s=0-7 (0 fluid, 1-7 dither) | ?e=0-12 new effect | &m=0 dither,1 smooth,2 halftone | &scan=0.15
 const q=new URLSearchParams(location.search);
 const TOTAL=21;
 let pick;
@@ -639,11 +654,29 @@ else{
 }
 if(!ok)document.body.innerHTML='<p style="color:#fff;padding:2rem;font-family:sans-serif">WebGL not supported</p>';
 
-if(q.has('clock')){
-  const el=document.getElementById('clock');el.style.display='flex';
-  const tick=()=>{el.textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});};
-  tick();setInterval(tick,1000);
+/* ---------- clock + control panel ---------- */
+const $=id=>document.getElementById(id);
+const store={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:v;}catch(e){return d;}},set(k,v){try{localStorage.setItem(k,v);}catch(e){}}};
+let clockOn=store.get('clockOn','1')==='1', h24=store.get('h24','0')==='1';
+const clockEl=$('clock');
+function tick(){clockEl.textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hourCycle:h24?'h23':'h12'});}
+function applyUI(){
+  clockEl.style.display=clockOn?'block':'none';
+  $('ctoggle').textContent='Clock: '+(clockOn?'on':'off');
+  $('c24').textContent=h24?'24h':'12h';
+  tick();
 }
+function shuffle(){q.toString()?location.href=location.pathname:location.reload();}
+$('gear').onclick=()=>$('panel').classList.toggle('open');
+$('next').onclick=shuffle;
+$('ctoggle').onclick=()=>{clockOn=!clockOn;store.set('clockOn',clockOn?'1':'0');applyUI();};
+$('c24').onclick=()=>{h24=!h24;store.set('h24',h24?'1':'0');applyUI();};
+addEventListener('keydown',e=>{
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
+  if(e.key==='n'||e.key==='N')shuffle();
+  else if(e.key==='c'||e.key==='C')$('ctoggle').click();
+});
+applyUI();setInterval(tick,1000);
 </script>
 </body>
 </html>
