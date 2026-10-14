@@ -3,26 +3,52 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dither Pattern</title>
+<title>New Tab</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{width:100vw;height:100vh;overflow:hidden;background:#09090b}
+html,body{width:100%;height:100%;overflow:hidden;background:#09090b}
 canvas{position:absolute;inset:0;width:100%;height:100%}
 </style>
 </head>
 <body>
-<canvas id="c"></canvas>
 <script>
 'use strict';
-const c=document.getElementById('c');
-const gl=c.getContext('webgl2');
-if(!gl){document.body.innerHTML='<p style=color:#fff;padding:2rem>WebGL2 not supported</p>';throw'no webgl2';}
-const vsSrc='#version 300 es\nprecision mediump float;\nlayout(location=0)in vec4 p;\nvoid main(){gl_Position=p;}';
-const fsSrc=`#version 300 es
+
+/* ---------- helpers ---------- */
+const rnd=(a,b)=>a+Math.random()*(b-a);
+function hsl(h,s,l){ // h in degrees, s/l in 0..1 -> [r,g,b] 0..1
+  h=((h%360)+360)%360;
+  const k=n=>(n+h/30)%12, a=s*Math.min(l,1-l);
+  const f=n=>l-a*Math.max(-1,Math.min(k(n)-3,Math.min(9-k(n),1)));
+  return [f(0),f(8),f(4)];
+}
+function compile(gl,type,src){
+  const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))console.error(gl.getShaderInfoLog(s));
+  return s;
+}
+function makeProgram(gl,vs,fs){
+  const p=gl.createProgram();
+  gl.attachShader(p,compile(gl,gl.VERTEX_SHADER,vs));
+  gl.attachShader(p,compile(gl,gl.FRAGMENT_SHADER,fs));
+  gl.linkProgram(p);gl.useProgram(p);
+  const b=gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER,b);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([1,-1,-1,-1,1,1,-1,1]),gl.STATIC_DRAW);
+  return p;
+}
+function newCanvas(){
+  const c=document.createElement('canvas');
+  document.body.appendChild(c);
+  return c;
+}
+
+/* ---------- dither (WebGL2) ---------- */
+const DITHER_VS='#version 300 es\nprecision mediump float;\nlayout(location=0)in vec4 p;\nvoid main(){gl_Position=p;}';
+const DITHER_FS=`#version 300 es
 precision mediump float;
 
 uniform float u_time;
-
 uniform vec2 u_resolution;
 uniform float u_pixelRatio;
 uniform float u_originX;
@@ -34,7 +60,6 @@ uniform float u_scale;
 uniform float u_rotation;
 uniform float u_offsetX;
 uniform float u_offsetY;
-
 uniform float u_pxSize;
 uniform vec4 u_colorBack;
 uniform vec4 u_colorFront;
@@ -42,7 +67,6 @@ uniform float u_shape;
 uniform float u_type;
 
 out vec4 fragColor;
-
 
 vec3 permute(vec3 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
 float snoise(vec2 v) {
@@ -72,29 +96,24 @@ float snoise(vec2 v) {
   return 130.0 * dot(m, g);
 }
 
-
 #define TWO_PI 6.28318530718
 #define PI 3.14159265358979323846
 
+float hash11(float p) {
+  p = fract(p * 0.3183099) + 0.1;
+  p *= p + 19.19;
+  return fract(p * p);
+}
 
-  float hash11(float p) {
-    p = fract(p * 0.3183099) + 0.1;
-    p *= p + 19.19;
-    return fract(p * p);
-  }
-
-
-  float hash21(vec2 p) {
-    p = fract(p * vec2(0.3183099, 0.3678794)) + 0.1;
-    p += dot(p, p + 19.19);
-    return fract(p.x * p.y);
-  }
-
+float hash21(vec2 p) {
+  p = fract(p * vec2(0.3183099, 0.3678794)) + 0.1;
+  p += dot(p, p + 19.19);
+  return fract(p.x * p.y);
+}
 
 float getSimplexNoise(vec2 uv, float t) {
   float noise = .5 * snoise(uv - vec2(0., .3 * t));
   noise += .5 * snoise(2. * uv + vec2(0., .32 * t));
-
   return noise;
 }
 
@@ -105,7 +124,6 @@ const int bayer4x4[16] = int[16](
 3, 11, 1, 9,
 15, 7, 13, 5
 );
-
 const int bayer8x8[64] = int[64](
 0, 32, 8, 40, 2, 34, 10, 42,
 48, 16, 56, 24, 50, 18, 58, 26,
@@ -120,7 +138,6 @@ const int bayer8x8[64] = int[64](
 float getBayerValue(vec2 uv, int size) {
   ivec2 pos = ivec2(fract(uv / float(size)) * float(size));
   int index = pos.y * size + pos.x;
-
   if (size == 2) {
     return float(bayer2x2[index]) / 4.0;
   } else if (size == 4) {
@@ -130,7 +147,6 @@ float getBayerValue(vec2 uv, int size) {
   }
   return 0.0;
 }
-
 
 void main() {
   float t = .5 * u_time;
@@ -149,21 +165,19 @@ void main() {
   givenBoxSize = max(givenBoxSize, vec2(1.)) * u_pixelRatio;
   float r = u_rotation * PI / 180.;
   mat2 graphicRotation = mat2(cos(r), sin(r), -sin(r), cos(r));
-  vec2 graphicOffset = vec2(-u_offsetX, u_offsetY);
 
   float patternBoxRatio = givenBoxSize.x / givenBoxSize.y;
   vec2 boxSize = vec2(
   (u_worldWidth == 0.) ? u_resolution.x : givenBoxSize.x,
   (u_worldHeight == 0.) ? u_resolution.y : givenBoxSize.y
   );
-  
+
   if (u_shape > 3.5) {
     vec2 objectBoxSize = vec2(0.);
-    // fit = none
     objectBoxSize.x = min(boxSize.x, boxSize.y);
-    if (u_fit == 1.) { // fit = contain
+    if (u_fit == 1.) {
       objectBoxSize.x = min(u_resolution.x, u_resolution.y);
-    } else if (u_fit == 2.) { // fit = cover
+    } else if (u_fit == 2.) {
       objectBoxSize.x = max(u_resolution.x, u_resolution.y);
     }
     objectBoxSize.y = objectBoxSize.x;
@@ -176,12 +190,11 @@ void main() {
     shapeUV = graphicRotation * shapeUV;
   } else {
     vec2 patternBoxSize = vec2(0.);
-    // fit = none
     patternBoxSize.x = patternBoxRatio * min(boxSize.x / patternBoxRatio, boxSize.y);
     float patternWorldNoFitBoxWidth = patternBoxSize.x;
-    if (u_fit == 1.) { // fit = contain
+    if (u_fit == 1.) {
       patternBoxSize.x = patternBoxRatio * min(u_resolution.x / patternBoxRatio, u_resolution.y);
-    } else if (u_fit == 2.) { // fit = cover
+    } else if (u_fit == 2.) {
       patternBoxSize.x = patternBoxRatio * max(u_resolution.x / patternBoxRatio, u_resolution.y);
     }
     patternBoxSize.y = patternBoxSize.x / patternBoxRatio;
@@ -204,28 +217,21 @@ void main() {
 
   float shape = 0.;
   if (u_shape < 1.5) {
-    // Simplex noise
     shapeUV *= .001;
-
     shape = 0.5 + 0.5 * getSimplexNoise(shapeUV, t);
     shape = smoothstep(0.3, 0.9, shape);
 
   } else if (u_shape < 2.5) {
-    // Warp
     shapeUV *= .003;
-
     for (float i = 1.0; i < 6.0; i++) {
       shapeUV.x += 0.6 / i * cos(i * 2.5 * shapeUV.y + t);
       shapeUV.y += 0.6 / i * cos(i * 1.5 * shapeUV.x + t);
     }
-
     shape = .15 / max(0.001, abs(sin(t - shapeUV.y - shapeUV.x)));
     shape = smoothstep(0.02, 1., shape);
 
   } else if (u_shape < 3.5) {
-    // Dots
     shapeUV *= .05;
-
     float stripeIdx = floor(2. * shapeUV.x / TWO_PI);
     float rand = hash11(stripeIdx * 10.);
     rand = sign(rand - .5) * pow(.1 + abs(rand), .4);
@@ -233,22 +239,16 @@ void main() {
     shape = pow(abs(shape), 6.);
 
   } else if (u_shape < 4.5) {
-    // Sine wave
     shapeUV *= 4.;
-
     float wave = cos(.5 * shapeUV.x - 2. * t) * sin(1.5 * shapeUV.x + t) * (.75 + .25 * cos(3. * t));
     shape = 1. - smoothstep(-1., 1., shapeUV.y + wave);
 
   } else if (u_shape < 5.5) {
-    // Ripple
-
     float dist = length(shapeUV);
     float waves = sin(pow(dist, 1.7) * 7. - 3. * t) * .5 + .5;
     shape = waves;
 
   } else if (u_shape < 6.5) {
-    // Swirl
-
     float l = length(shapeUV);
     float angle = 6. * atan(shapeUV.y, shapeUV.x) + 4. * t;
     float twist = 1.2;
@@ -257,16 +257,13 @@ void main() {
     shape = mix(0., fract(offset), mid);
 
   } else {
-    // Sphere
     shapeUV *= 2.;
-
     float d = 1. - pow(length(shapeUV), 2.);
     vec3 pos = vec3(shapeUV, sqrt(max(0., d)));
     vec3 lightPos = normalize(vec3(cos(1.5 * t), .8, sin(1.25 * t)));
     shape = .5 + .5 * dot(lightPos, pos);
     shape *= step(0., d);
   }
-
 
   int type = int(floor(u_type));
   float dithering = 0.0;
@@ -303,41 +300,191 @@ void main() {
   fragColor = vec4(color, opacity);
 }
 `;
-function sh(t,s){const n=gl.createShader(t);gl.shaderSource(n,s);gl.compileShader(n);if(!gl.getShaderParameter(n,gl.COMPILE_STATUS)){console.error(gl.getShaderInfoLog(n));return null;}return n;}
-const prog=gl.createProgram();
-gl.attachShader(prog,sh(gl.VERTEX_SHADER,vsSrc));
-gl.attachShader(prog,sh(gl.FRAGMENT_SHADER,fsSrc));
-gl.linkProgram(prog);
-gl.useProgram(prog);
-const buf=gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER,buf);
-gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([1,-1,-1,-1,1,1,-1,1]),gl.STATIC_DRAW);
-gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
-gl.enableVertexAttribArray(0);
-const u={};
-['u_resolution','u_time','u_pixelRatio','u_originX','u_originY','u_worldWidth','u_worldHeight','u_fit','u_scale','u_rotation','u_offsetX','u_offsetY','u_pxSize','u_colorBack','u_colorFront','u_shape','u_type'].forEach(n=>{u[n]=gl.getUniformLocation(prog,n);});
-gl.uniform1f(u.u_pixelRatio,devicePixelRatio);
-gl.uniform1f(u.u_originX,0.5);
-gl.uniform1f(u.u_originY,0.5);
-gl.uniform1f(u.u_worldWidth,0);
-gl.uniform1f(u.u_worldHeight,0);
-gl.uniform1f(u.u_fit,1);
-gl.uniform1f(u.u_scale,1);
-gl.uniform1f(u.u_rotation,0);
-gl.uniform1f(u.u_offsetX,0);
-gl.uniform1f(u.u_offsetY,0);
-gl.uniform1f(u.u_pxSize,2);
-gl.uniform4fv(u.u_colorBack,new Float32Array([0,0,0,0]));
-gl.uniform4fv(u.u_colorFront,new Float32Array([0.2784313725490196,0.6588235294117647,0.8823529411764706,1]));
-gl.uniform1f(u.u_shape,6);
-gl.uniform1f(u.u_type,4);
-const t0=Date.now();
-(function render(){if(c.width!==c.clientWidth||c.height!==c.clientHeight){c.width=c.clientWidth;c.height=c.clientHeight;}
-gl.viewport(0,0,c.width,c.height);
-gl.uniform2f(u.u_resolution,c.width,c.height);
-gl.uniform1f(u.u_time,(Date.now()-t0)/1000);
-gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
-requestAnimationFrame(render);})();
+
+function runDither(shapeId){
+  const c=newCanvas(), gl=c.getContext('webgl2');
+  if(!gl)return false;
+  const prog=makeProgram(gl,DITHER_VS,DITHER_FS);
+  gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
+  gl.enableVertexAttribArray(0);
+  const u={};
+  ['u_resolution','u_time','u_pixelRatio','u_originX','u_originY','u_worldWidth','u_worldHeight','u_fit','u_scale','u_rotation','u_offsetX','u_offsetY','u_pxSize','u_colorBack','u_colorFront','u_shape','u_type'].forEach(n=>u[n]=gl.getUniformLocation(prog,n));
+
+  // random front colour: any hue, bright enough to read on black
+  const rgb=hsl(rnd(0,360),rnd(.45,.9),rnd(.5,.68));
+  gl.uniform1f(u.u_originX,.5);gl.uniform1f(u.u_originY,.5);
+  gl.uniform1f(u.u_worldWidth,0);gl.uniform1f(u.u_worldHeight,0);
+  gl.uniform1f(u.u_fit,0);gl.uniform1f(u.u_scale,.6);gl.uniform1f(u.u_rotation,0);
+  gl.uniform1f(u.u_offsetX,0);gl.uniform1f(u.u_offsetY,0);
+  gl.uniform1f(u.u_pxSize,2);
+  gl.uniform4fv(u.u_colorBack,new Float32Array([0,0,0,1]));
+  gl.uniform4fv(u.u_colorFront,new Float32Array([...rgb,1]));
+  gl.uniform1f(u.u_shape,shapeId);
+  gl.uniform1f(u.u_type,3); // Bayer 4x4
+
+  const t0=Date.now(), off=rnd(0,100);
+  (function render(){
+    const dpr=window.devicePixelRatio||1;
+    const w=Math.round(c.clientWidth*dpr), h=Math.round(c.clientHeight*dpr);
+    if(c.width!==w||c.height!==h){c.width=w;c.height=h;}
+    gl.viewport(0,0,c.width,c.height);
+    gl.uniform1f(u.u_pixelRatio,dpr);
+    gl.uniform2f(u.u_resolution,c.width,c.height);
+    gl.uniform1f(u.u_time,(Date.now()-t0)/1000+off);
+    gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+    requestAnimationFrame(render);
+  })();
+  return true;
+}
+
+/* ---------- fluid gradient (WebGL1) ---------- */
+const FLUID_VS='attribute vec4 p;void main(){gl_Position=p;}';
+const FLUID_FS=`
+precision highp float;
+uniform vec2 u_resolution;
+uniform float u_time;
+uniform vec2 u_mouse;
+uniform float u_speed;
+uniform float u_fq;
+uniform float u_wp;
+uniform float u_grain;
+uniform vec3 u_c1;
+uniform vec3 u_c2;
+uniform vec3 u_c3;
+uniform vec3 u_c4;
+uniform vec3 u_c5;
+
+vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
+vec2 mod289(vec2 x){return x-floor(x*(1./289.))*289.;}
+vec3 permute(vec3 x){return mod289(((x*34.)+1.)*x);}
+float snoise(vec2 v){
+  const vec4 C=vec4(.211324865405187,.366025403784439,-.577350269189626,.024390243902439);
+  vec2 i=floor(v+dot(v,C.yy));
+  vec2 x0=v-i+dot(i,C.xx);
+  vec2 i1=(x0.x>x0.y)?vec2(1.,0.):vec2(0.,1.);
+  vec4 x12=x0.xyxy+C.xxzz;
+  x12.xy-=i1;
+  i=mod289(i);
+  vec3 pv=permute(permute(i.y+vec3(0.,i1.y,1.))+i.x+vec3(0.,i1.x,1.));
+  vec3 m=max(.5-vec3(dot(x0,x0),dot(x12.xy,x12.xy),dot(x12.zw,x12.zw)),0.);
+  m=m*m;m=m*m;
+  vec3 x=2.*fract(pv*C.www)-1.;
+  vec3 h=abs(x)-.5;
+  vec3 ox=floor(x+.5);
+  vec3 a0=x-ox;
+  m*=1.79284291400159-.85373472095314*(a0*a0+h*h);
+  vec3 g;
+  g.x=a0.x*x0.x+h.x*x0.y;
+  g.yz=a0.yz*x12.xz+h.yz*x12.yw;
+  return 130.*dot(m,g);
+}
+
+float fbm(vec2 q){
+  float f=0., a=.5;
+  for(int i=0;i<5;i++){ f+=a*snoise(q); q*=2.02; a*=.5; }
+  return f;
+}
+
+void main(){
+  vec2 st=gl_FragCoord.xy/u_resolution.xy;
+  vec2 asp=st; asp.x*=u_resolution.x/u_resolution.y;
+  float t=u_time*u_speed;
+
+  vec2 m_asp=u_mouse;
+  m_asp.x*=u_resolution.x/u_resolution.y;
+  vec2 m_dir=asp-m_asp;
+  float m_dist=length(m_dir);
+  float m_influence=smoothstep(0.45,0.0,m_dist);
+
+  vec3 cCyan=u_c1, cYellow=u_c2, cOrange=u_c3, cPurple=u_c4, cBlue=u_c5;
+
+  vec2 q=asp*u_fq;
+  q+=m_dir*m_influence*0.35;
+
+  float flow=fbm(q+vec2(t*.3,-t*.2));
+  float drape=fbm(q*1.7+vec2(flow*(1.0+u_wp*1.2),t*.15));
+
+  float folds=sin((drape*4.0+flow*2.0)*3.14159);
+  float shade=folds*0.5+0.5;
+  float highlight=pow(max(folds,0.0),6.0);
+
+  vec3 col=mix(cBlue,cPurple,clamp(flow*.5+.5,0.,1.));
+  col=mix(col,cCyan,smoothstep(.2,.9,drape*.5+.5));
+  col=mix(col,cOrange,smoothstep(.3,1.,shade*(1.0-asp.y)));
+  col=mix(col,cYellow,highlight*0.8);
+
+  col*=0.55+0.55*shade;
+  col+=highlight*0.35;
+
+  col+=cPurple*m_influence*0.05;
+
+  float gr=fract(sin(dot(gl_FragCoord.xy+floor(u_time*24.),vec2(12.9898,78.233)))*43758.5453123);
+  col+=(gr-.5)*u_grain;
+
+  gl_FragColor=vec4(col,1.);
+}
+`;
+
+function runFluid(){
+  const c=newCanvas(), gl=c.getContext('webgl');
+  if(!gl)return false;
+  const prog=makeProgram(gl,FLUID_VS,FLUID_FS);
+  const ap=gl.getAttribLocation(prog,'p');
+  gl.vertexAttribPointer(ap,2,gl.FLOAT,false,0,0);
+  gl.enableVertexAttribArray(ap);
+  const U=n=>gl.getUniformLocation(prog,n);
+  const ur=U('u_resolution'),ut=U('u_time'),um=U('u_mouse');
+
+  // random palette: base hue + spread offsets, vivid but not neon
+  const base=rnd(0,360);
+  const offs=[0,rnd(30,70),rnd(110,150),rnd(190,230),rnd(260,310)].sort(()=>Math.random()-.5);
+  ['u_c1','u_c2','u_c3','u_c4','u_c5'].forEach((n,i)=>{
+    gl.uniform3fv(U(n),new Float32Array(hsl(base+offs[i]+rnd(-12,12),rnd(.6,.95),rnd(.42,.62))));
+  });
+  gl.uniform1f(U('u_speed'),rnd(.18,.20));
+  gl.uniform1f(U('u_fq'),rnd(.6,.8));
+  gl.uniform1f(U('u_wp'),rnd(.2,.26));
+  gl.uniform1f(U('u_grain'),rnd(.048,.066));
+
+  let mx=.5,my=.5,tx=.5,ty=.5;
+  addEventListener('mousemove',e=>{tx=e.clientX/innerWidth;ty=1-e.clientY/innerHeight;});
+  addEventListener('touchmove',e=>{if(e.touches.length){const t=e.touches[0];tx=t.clientX/innerWidth;ty=1-t.clientY/innerHeight;}},{passive:true});
+
+  const t0=Date.now(), off=rnd(0,200);
+  (function draw(){
+    if(c.width!==c.clientWidth||c.height!==c.clientHeight){c.width=c.clientWidth;c.height=c.clientHeight;}
+    gl.viewport(0,0,c.width,c.height);
+    gl.uniform2f(ur,c.width,c.height);
+    gl.uniform1f(ut,(Date.now()-t0)/1000+off);
+    mx+=(tx-mx)*.08;my+=(ty-my)*.08;
+    gl.uniform2f(um,mx,my);
+    gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+    requestAnimationFrame(draw);
+  })();
+  return true;
+}
+
+/* ---------- pick one at random ---------- */
+// 1-7 = dither shapes (simplex, warp, dots, sine, ripple, swirl, sphere); 0 = fluid gradient
+const SHADERS=[0,1,2,3,4,5,6,7];
+// Fluid appears twice so it gets ~2/9 of the picks, like it had 2 of the 9 originals
+const POOL=[...SHADERS,0];
+
+let pick;
+const forced=parseInt(new URLSearchParams(location.search).get('s'));
+if(!isNaN(forced)){
+  pick=forced;           // e.g. ?s=6 to preview a specific shader
+}else{
+  let last=-1;
+  try{last=parseInt(localStorage.getItem('lastShader'));}catch(e){}
+  do{pick=POOL[Math.floor(Math.random()*POOL.length)];}while(pick===last&&POOL.length>1);
+  try{localStorage.setItem('lastShader',pick);}catch(e){}
+}
+
+const ok=pick===0?runFluid():runDither(pick);
+if(!ok){
+  document.body.innerHTML='<p style="color:#fff;padding:2rem;font-family:sans-serif">WebGL not supported</p>';
+}
 </script>
 </body>
 </html>
